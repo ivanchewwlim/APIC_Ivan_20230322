@@ -1,0 +1,81 @@
+- name: Install Code Server
+  hosts: all
+  vars:
+    cs_archive: "https://github.com/coder/code-server/releases/download/v4.9.1/code-server-4.9.1-linux-amd64.tar.gz"
+    cs_directory: "/usr/local/opt"
+    cs_unpacked: "code-server-4.9.1-linux-amd64"
+    cs_symlinks:
+      - symlink_source: "{{cs_directory}}/{{cs_unpacked}}"
+        symlink_dest: "/usr/lib/code-server"
+      - symlink_source: "{{cs_directory}}/{{cs_unpacked}}/bin/code-server"
+        symlink_dest: "/usr/bin/code-server"
+  tasks:
+  - name: Update OS
+    apt:
+      update_cache: yes
+      upgrade: yes
+    register: output
+    until: output.stderr == ""
+    retries: 10
+
+  - name: Create a directory if it does not exist
+    file:
+      path: "{{item}}"
+      state: directory
+      mode: '0755'
+    loop:
+    - "{{cs_directory}}"
+    - /var/lib/code-server
+  - name: Check if codeserver directory exists
+    stat:
+      path: "{{cs_directory}}/{{cs_unpacked}}"
+    register: directory
+  - name: Extract CS Archive
+    ansible.builtin.unarchive:
+      src: "{{cs_archive}}"
+      dest: "{{cs_directory}}"
+      remote_src: yes
+    when: not directory.stat.exists
+  - name: Create a symbolic links
+    ansible.builtin.file:
+      src: "{{item.symlink_source}}"
+      dest: "{{item.symlink_dest}}"
+      state: link
+    loop: "{{cs_symlinks}}"
+
+  - name: Generate Code server service
+    template:
+      src: ic-code-server.service.j2
+      dest: /lib/systemd/system/code-server.service
+  - name : Start Code server and reload on reboot
+    ansible.builtin.systemd:
+      name: code-server
+      daemon_reload: true
+      enabled: true
+      state: started
+
+- name : Install Nginx
+  hosts : all
+  tasks:
+    - name: Install Nginx
+      apt:
+        name: nginx
+        state: latest
+      register: output
+      until: output.stderr == ""
+      retries: 10
+
+    - name: Generate Code-server.conf
+      template:
+        src: ic-code-server.conf.j2
+        dest: /etc/nginx/sites-available/code-server.conf
+
+    - name: Create a symbolic links code-server.conf to /etc/nginx/sites-enabled
+      file:
+        src: /etc/nginx/sites-available/code-server.conf
+        dest: /etc/nginx/sites-enabled/code-server.conf
+        state: link
+    - name: restart nginx
+      ansible.builtin.systemd:
+        name: nginx
+        state: restarted
